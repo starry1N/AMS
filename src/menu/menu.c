@@ -140,15 +140,18 @@ void queryCardMenu(void)
         printf("未找到相关卡信息。\n");
     } else {
         const char *stateNames[] = {"未上机", "上机中", "已注销"};
-        printf("\n\t%-20s%-12s%-12s%-10s\n",
-               "卡号", "密码", "余额", "卡状态");
-        printf("\t--------------------------------------------------\n");
+        printf("\n\t%-20s%-10s%-12s%-12s%-12s%-22s\n",
+               "卡号", "状态", "余额", "累计使用", "使用次数", "上次使用时间");
+        printf("\t--------------------------------------------------------------------------------\n");
         CardNode *p = result.head;
         while (p != NULL) {
             Card *c = &p->data;
+            char timeBuf[32];
             int si = (c->state >= 0 && c->state <= 2) ? c->state : 0;
-            printf("\t%-20s%-12s%-12.2f%-10s\n",
-                   c->cardNo, c->password, c->money, stateNames[si]);
+            timeToString(c->lastUseTime, timeBuf, sizeof(timeBuf));
+            printf("\t%-20s%-10s%-12.2f%-12.2f%-12d%-22s\n",
+                   c->cardNo, stateNames[si], c->money, c->totalMoney,
+                   c->useCount, timeBuf);
             p = p->next;
         }
     }

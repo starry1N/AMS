@@ -7,8 +7,8 @@ echo   计费管理系统  —  编译脚本
 echo ============================================================
 echo.
 
-set GCC=D:\mingw64\bin\gcc.exe
-
+@REM set GCC=D:\mingw64\bin\gcc.exe
+set GCC=D:\BaiduNetdiskDownload\MinGW\bin\g++.exe
 echo 正在编译...
 
 %GCC% ^
