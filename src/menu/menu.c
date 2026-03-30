@@ -132,31 +132,52 @@ void queryCardMenu(void)
         return;
     }
 
-    CardList list, result;
+    CardList list;
     getCard(&list);
-    queryCards(&list, keyword, &result);
-
-    if (result.count == 0) {
-        printf("未找到相关卡信息。\n");
-    } else {
+    
+    /* 先尝试精确匹配 */
+    Card *exactMatch = queryCard(&list, keyword);
+    
+    if (exactMatch != NULL) {
+        /* 有精确匹配，仅显示该条记录 */
         const char *stateNames[] = {"未上机", "上机中", "已注销"};
         printf("\n\t%-20s%-10s%-12s%-12s%-12s%-22s\n",
                "卡号", "状态", "余额", "累计使用", "使用次数", "上次使用时间");
         printf("\t--------------------------------------------------------------------------------\n");
-        CardNode *p = result.head;
-        while (p != NULL) {
-            Card *c = &p->data;
-            char timeBuf[32];
-            int si = (c->state >= 0 && c->state <= 2) ? c->state : 0;
-            timeToString(c->lastUseTime, timeBuf, sizeof(timeBuf));
-            printf("\t%-20s%-10s%-12.2f%-12.2f%-12d%-22s\n",
-                   c->cardNo, stateNames[si], c->money, c->totalMoney,
-                   c->useCount, timeBuf);
-            p = p->next;
+        char timeBuf[32];
+        int si = (exactMatch->state >= 0 && exactMatch->state <= 2) ? exactMatch->state : 0;
+        timeToString(exactMatch->lastUseTime, timeBuf, sizeof(timeBuf));
+        printf("\t%-20s%-10s%-12.2f%-12.2f%-12d%-22s\n",
+               exactMatch->cardNo, stateNames[si], exactMatch->money, exactMatch->totalMoney,
+               exactMatch->useCount, timeBuf);
+    } else {
+        /* 精确匹配失败，进行模糊查询 */
+        CardList result;
+        queryCards(&list, keyword, &result);
+        
+        if (result.count == 0) {
+            printf("未找到相关卡信息。\n");
+        } else {
+            const char *stateNames[] = {"未上机", "上机中", "已注销"};
+            printf("\n\t%-20s%-10s%-12s%-12s%-12s%-22s\n",
+                   "卡号", "状态", "余额", "累计使用", "使用次数", "上次使用时间");
+            printf("\t--------------------------------------------------------------------------------\n");
+            CardNode *p = result.head;
+            while (p != NULL) {
+                Card *c = &p->data;
+                char timeBuf[32];
+                int si = (c->state >= 0 && c->state <= 2) ? c->state : 0;
+                timeToString(c->lastUseTime, timeBuf, sizeof(timeBuf));
+                printf("\t%-20s%-10s%-12.2f%-12.2f%-12d%-22s\n",
+                       c->cardNo, stateNames[si], c->money, c->totalMoney,
+                       c->useCount, timeBuf);
+                p = p->next;
+            }
         }
+        
+        freeCardList(&result);
     }
 
-    freeCardList(&result);
     freeCardList(&list);
 }
 
