@@ -24,7 +24,7 @@ int main(void)
             case 6:  refundMenu();             break;
             case 7:  queryStatisticsMenu();    break;
             case 8:  cancelCardMenu();         break;
-            // case 9:  rateManagementMenu();     break;
+            case 9:  adminMenu();              break;
             case 0:  printf("\n退出！\n");
                      system("pause");
                      break;

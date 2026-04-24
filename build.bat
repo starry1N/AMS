@@ -16,10 +16,12 @@ echo 正在编译...
   src/dao/tool.c ^
   src/dao/card_file.c ^
   src/dao/billing_file.c ^
+  src/dao/admin_file.c ^
   src/dao/record_file.c ^
   src/dao/rate_file.c ^
   src/service/card_service.c ^
   src/service/billing_service.c ^
+  src/service/admin_service.c ^
   src/service/record_service.c ^
   src/service/rate_service.c ^
   src/menu/menu.c ^

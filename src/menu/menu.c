@@ -7,12 +7,62 @@
 #include "../../include/card.h"
 #include "../../include/billing.h"
 #include "../../include/rate.h"
+#include "../../include/admin.h"
 #include "../../include/tool.h"
 #include "../../include/card_service.h"
 #include "../../include/billing_service.h"
 #include "../../include/record_service.h"
+#include "../../include/admin_service.h"
 #include "../../include/rate_service.h"
 #include "../../include/menu.h"
+
+static int readTimeInput(const char *prompt, time_t *outTime)
+{
+    char buffer[64];
+    printf("%s", prompt);
+    if (scanf(" %63[^\n]", buffer) != 1) {
+        clearInputBuf();
+        printf("输入无效！\n");
+        return 0;
+    }
+    clearInputBuf();
+    if (!parseTimeString(buffer, outTime)) {
+        printf("时间格式错误！请使用 YYYY-MM-DD HH:MM:SS\n");
+        return 0;
+    }
+    return 1;
+}
+
+static void printBillingTable(const Billing *billings, int count)
+{
+    if (billings == NULL || count <= 0) {
+        printf("暂无消费记录。\n");
+        return;
+    }
+
+    printf("\n\t%-20s%-22s%-22s%-12s%-10s\n",
+           "卡号", "上机时间", "下机时间", "消费金额", "状态");
+    printf("\t----------------------------------------------------------------------\n");
+    for (int i = 0; i < count; i++) {
+        char sBuf[32], eBuf[32];
+        timeToString(billings[i].startTime, sBuf, sizeof(sBuf));
+        timeToString(billings[i].endTime,   eBuf, sizeof(eBuf));
+        printf("\t%-20s%-22s%-22s%-12.2f%-10s\n",
+               billings[i].cardNo, sBuf, eBuf,
+               billings[i].amount,
+               billings[i].state == BILLING_STATE_SETTLED ? "已结算" : "未结算");
+    }
+}
+
+static void printMonthlyRevenue(int year, const double monthlyRevenue[12])
+{
+    printf("\n===== %d 年月营业额 =====\n", year);
+    printf("\t%-8s%-12s\n", "月份", "营业额");
+    printf("\t----------------------\n");
+    for (int i = 0; i < 12; i++) {
+        printf("\t%-8d%-12.2f\n", i + 1, monthlyRevenue[i]);
+    }
+}
 
 /* ================================================================
  *  主菜单输出
@@ -31,7 +81,7 @@ void outputMenu(void)
     printf("\t  6. 退费                                  \n");
     printf("\t  7. 查询统计                              \n");
     printf("\t  8. 注销卡                                \n");
-    // printf("\t  9. 计费标准                              \n");
+    printf("\t  9. 管理员管理                            \n");
     printf("\t  0. 退出                                  \n");
     printf("\t============================================\n");
     printf("\t请选择菜单项编号: ");
@@ -223,6 +273,7 @@ void loginMenu(void)
         }
     }
     free(plans);
+    plans = NULL;
 
     if (selectedRate <= 0.0) {
         printf("方案编号不存在，请重新选择！\n");
@@ -236,12 +287,10 @@ void loginMenu(void)
     if (scanf("%18s", cardNo) != 1) {
         clearInputBuf();
         printf("输入无效！\n");
-        free(plans);
         return;
     }
     if (strlen(cardNo) == 0) {
         printf("卡号为空！\n");
-        free(plans);
         return;
     }
     printf("请输入密码: ");
@@ -255,15 +304,15 @@ void loginMenu(void)
         return;
     }
 
-    Card card;
-    int ret = loginCard(cardNo, password, selectedRate, &card);
+    LogonInfo logonInfo;
+    int ret = loginCard(cardNo, password, selectedRate, &logonInfo);
     if (ret == 1) {
         char timeBuf[32];
-        timeToString(card.lastUseTime, timeBuf, sizeof(timeBuf));
-        printf("\n\t%-20s%-12s%-22s%-14s\n", "卡号", "余额", "上机时间", "费率(元/时)");
-        printf("\t------------------------------------------------------------------\n");
-        printf("\t%-20s%-12.2f%-22s%-14.2f\n",
-               card.cardNo, card.money, timeBuf, card.currentRate);
+        timeToString(logonInfo.logonTime, timeBuf, sizeof(timeBuf));
+        printf("\n\t%-20s%-12s%-22s\n", "卡号", "余额", "上机时间");
+        printf("\t--------------------------------------------------\n");
+        printf("\t%-20s%-12.2f%-22s\n",
+               logonInfo.cardNo, logonInfo.balance, timeBuf);
         printf("上机成功！\n");
     } else if (ret == -2) {
         printf("该卡正在使用或已注销！\n");
@@ -306,18 +355,78 @@ void logoutMenu(void)
         return;
     }
 
-    double cost    = 0.0;
-    time_t endTime = 0;
-    int ret = logoutCard(cardNo, password, &cost, &endTime);
+    SettleInfo settleInfo;
+    int ret = logoutCard(cardNo, password, &settleInfo);
     if (ret == 1) {
-        char timeBuf[32];
-        timeToString(endTime, timeBuf, sizeof(timeBuf));
-        printf("\n\t%-20s%-12s%-22s\n", "卡号", "消费金额", "下机时间");
-        printf("\t--------------------------------------------------\n");
-        printf("\t%-20s%-12.2f%-22s\n", cardNo, cost, timeBuf);
+        char logonBuf[32];
+        char settleBuf[32];
+        timeToString(settleInfo.logonTime, logonBuf, sizeof(logonBuf));
+        timeToString(settleInfo.settleTime, settleBuf, sizeof(settleBuf));
+        printf("\n\t%-20s%-12s%-12s%-22s%-22s\n",
+               "卡号", "消费金额", "余额", "上机时间", "下机时间");
+        printf("\t--------------------------------------------------------------------------------\n");
+        printf("\t%-20s%-12.2f%-12.2f%-22s%-22s\n",
+               settleInfo.cardNo, settleInfo.amount, settleInfo.balance,
+               logonBuf, settleBuf);
         printf("下机成功！\n");
     } else if (ret == -2) {
         printf("下机失败！该卡未处于上机状态。\n");
+    } else if (ret == -3) {
+        printf("下机失败！余额不足，当前余额无法结算本次费用。\n");
+        printf("至少还需充值 %.2f 元。\n", settleInfo.neededRecharge);
+        printf("是否立即充值后重新下机？(1=是 / 0=否): ");
+
+        int rechargeChoice = 0;
+        if (scanf("%d", &rechargeChoice) != 1) {
+            clearInputBuf();
+            printf("输入无效！\n");
+            return;
+        }
+        clearInputBuf();
+
+        if (rechargeChoice == 1) {
+            double rechargeAmount = 0.0;
+            printf("请输入充值金额（建议不低于 %.2f 元）: ", settleInfo.neededRecharge);
+            if (scanf("%lf", &rechargeAmount) != 1) {
+                clearInputBuf();
+                printf("输入无效！\n");
+                return;
+            }
+            clearInputBuf();
+
+            if (rechargeAmount <= 0.0) {
+                printf("充值金额必须大于0！\n");
+                return;
+            }
+
+            Card rechargeCardInfo;
+            int rechargeRet = rechargeCard(cardNo, password, rechargeAmount, &rechargeCardInfo);
+            if (rechargeRet == 1) {
+                printf("充值成功，已自动重新尝试下机。\n");
+                ret = logoutCard(cardNo, password, &settleInfo);
+                if (ret == 1) {
+                    char logonBuf[32];
+                    char settleBuf[32];
+                    timeToString(settleInfo.logonTime, logonBuf, sizeof(logonBuf));
+                    timeToString(settleInfo.settleTime, settleBuf, sizeof(settleBuf));
+                    printf("\n\t%-20s%-12s%-12s%-22s%-22s\n",
+                           "卡号", "消费金额", "余额", "上机时间", "下机时间");
+                    printf("\t--------------------------------------------------------------------------------\n");
+                    printf("\t%-20s%-12.2f%-12.2f%-22s%-22s\n",
+                           settleInfo.cardNo, settleInfo.amount, settleInfo.balance,
+                           logonBuf, settleBuf);
+                    printf("下机成功！\n");
+                } else if (ret == -3) {
+                    printf("充值后余额仍不足，请继续充值后再尝试下机。\n");
+                } else if (ret == -2) {
+                    printf("下机失败！该卡未处于上机状态。\n");
+                } else {
+                    printf("下机失败！卡号或密码错误。\n");
+                }
+            } else {
+                printf("充值失败！卡号或密码错误，或该卡已注销。\n");
+            }
+        }
     } else {
         printf("下机失败！卡号或密码错误。\n");
     }
@@ -445,41 +554,86 @@ void refundMenu(void)
 void queryStatisticsMenu(void)
 {
     printf("\n===== 查询统计 =====\n");
-    printf("  1. 查询消费记录\n");
-    printf("  2. 统计总营业额\n");
+    printf("  1. 按卡号和时间段查询消费记录\n");
+    printf("  2. 统计指定时间段总营业额\n");
+    printf("  3. 统计一年中每个月营业额\n");
+    printf("  4. 查询全部消费记录\n");
+    printf("  5. 统计总营业额\n");
+    printf("  0. 返回\n");
     printf("请选择: ");
 
     int choice;
-    scanf("%d", &choice);
-
-    int count = 0;
-    Billing *billings = queryBillings(&count);   /* 通过业务逻辑层获取 */
+    if (scanf("%d", &choice) != 1) {
+        clearInputBuf();
+        printf("输入无效！\n");
+        return;
+    }
+    clearInputBuf();
 
     if (choice == 1) {
-        if (billings == NULL || count == 0) {
-            printf("暂无消费记录。\n");
-        } else {
-            printf("\n\t%-20s%-22s%-22s%-12s%-10s\n",
-                   "卡号", "上机时间", "下机时间", "消费金额", "状态");
-            printf("\t----------------------------------------------------------------------\n");
-            for (int i = 0; i < count; i++) {
-                char sBuf[32], eBuf[32];
-                timeToString(billings[i].startTime, sBuf, sizeof(sBuf));
-                timeToString(billings[i].endTime,   eBuf, sizeof(eBuf));
-                printf("\t%-20s%-22s%-22s%-12.2f%-10s\n",
-                       billings[i].cardNo, sBuf, eBuf,
-                       billings[i].amount,
-                       billings[i].state == BILLING_STATE_SETTLED ? "已结算" : "未结算");
-            }
+        char cardNo[CARD_NO_LEN];
+        time_t startTime = 0;
+        time_t endTime = 0;
+        int count = 0;
+
+        printf("请输入卡号: ");
+        if (scanf("%18s", cardNo) != 1) {
+            clearInputBuf();
+            printf("输入无效！\n");
+            return;
         }
+        clearInputBuf();
+        if (strlen(cardNo) == 0) {
+            printf("卡号为空！\n");
+            return;
+        }
+        if (!readTimeInput("请输入开始时间(YYYY-MM-DD HH:MM:SS): ", &startTime)) return;
+        if (!readTimeInput("请输入结束时间(YYYY-MM-DD HH:MM:SS): ", &endTime)) return;
+        if (startTime > endTime) {
+            printf("开始时间不能大于结束时间！\n");
+            return;
+        }
+
+        Billing *billings = queryBillingsByCardAndTime(cardNo, startTime, endTime, &count);
+        printBillingTable(billings, count);
+        if (billings != NULL) free(billings);
     } else if (choice == 2) {
-        double total = getTotalRevenue();         /* 通过业务逻辑层统计 */
+        time_t startTime = 0;
+        time_t endTime = 0;
+
+        if (!readTimeInput("请输入开始时间(YYYY-MM-DD HH:MM:SS): ", &startTime)) return;
+        if (!readTimeInput("请输入结束时间(YYYY-MM-DD HH:MM:SS): ", &endTime)) return;
+        if (startTime > endTime) {
+            printf("开始时间不能大于结束时间！\n");
+            return;
+        }
+
+        double total = getTotalRevenueByTime(startTime, endTime);
+        printf("\n指定时间段总营业额：%.2f 元\n", total);
+    } else if (choice == 3) {
+        int year;
+        printf("请输入统计年份(例如 2026): ");
+        if (scanf("%d", &year) != 1) {
+            clearInputBuf();
+            printf("输入无效！\n");
+            return;
+        }
+        clearInputBuf();
+
+        double monthlyRevenue[12];
+        getMonthlyRevenue(year, monthlyRevenue);
+        printMonthlyRevenue(year, monthlyRevenue);
+    } else if (choice == 4) {
+        int count = 0;
+        Billing *billings = queryBillings(&count);
+        printBillingTable(billings, count);
+        if (billings != NULL) free(billings);
+    } else if (choice == 5) {
+        double total = getTotalRevenue();
         printf("\n总营业额：%.2f 元\n", total);
-    } else {
+    } else if (choice != 0) {
         printf("无效的选择！\n");
     }
-
-    if (billings != NULL) free(billings);
 }
 
 /* ================================================================
@@ -539,6 +693,7 @@ void rateManagementMenu(void)
         printAllRates();
         printf("\n  1. 添加计费方案\n");
         printf("  2. 删除计费方案\n");
+        printf("  3. 修改计费方案\n");
         printf("  0. 返回\n");
         printf("请选择: ");
 
@@ -574,7 +729,200 @@ void rateManagementMenu(void)
                 printf("方案编号 %d 已删除。\n", rateId);
             else
                 printf("删除失败！未找到编号为 %d 的方案。\n", rateId);
+        } else if (choice == 3) {
+            int rateId;
+            char name[RATE_NAME_LEN];
+            double newRate;
+
+            printf("请输入要修改的方案编号: ");
+            if (scanf("%d", &rateId) != 1) {
+                clearInputBuf();
+                printf("输入无效！\n");
+                continue;
+            }
+            clearInputBuf();
+
+            printf("请输入新的方案名称（最多32字符）: ");
+            if (scanf(" %32[^\n]", name) != 1) {
+                clearInputBuf();
+                printf("输入无效！\n");
+                continue;
+            }
+            clearInputBuf();
+            if (strlen(name) == 0) {
+                printf("方案名称为空！\n");
+                continue;
+            }
+
+            printf("请输入新的费率（元/小时）: ");
+            if (scanf("%lf", &newRate) != 1) {
+                clearInputBuf();
+                printf("输入无效！\n");
+                continue;
+            }
+            clearInputBuf();
+            if (newRate <= 0.0) {
+                printf("费率必须大于 0！\n");
+                continue;
+            }
+
+            if (updateRatePlan(rateId, name, newRate))
+                printf("方案编号 %d 已修改为「%s」（%.2f 元/时）。\n", rateId, name, newRate);
+            else
+                printf("修改失败！未找到编号为 %d 的方案。\n", rateId);
         }
         clearInputBuf();
+    } while (choice != 0);
+}
+
+/* ================================================================
+ *  9. 管理员管理
+ * ================================================================ */
+void adminMenu(void)
+{
+    printf("\n===== 管理员登录 =====\n");
+
+    char userName[ADMIN_NAME_LEN];
+    char password[ADMIN_PASSWORD_LEN];
+
+    printf("请输入管理员账号: ");
+    if (scanf("%18s", userName) != 1) {
+        clearInputBuf();
+        printf("输入无效！\n");
+        return;
+    }
+    clearInputBuf();
+    if (strlen(userName) == 0) {
+        printf("管理员账号为空！\n");
+        return;
+    }
+
+    printf("请输入密码: ");
+    if (scanf("%8s", password) != 1) {
+        clearInputBuf();
+        printf("输入无效！\n");
+        return;
+    }
+    clearInputBuf();
+    if (strlen(password) == 0) {
+        printf("密码为空！\n");
+        return;
+    }
+
+    Admin currentAdmin;
+    if (loginAdmin(userName, password, &currentAdmin) != 1) {
+        printf("管理员登录失败！账号或密码错误。\n");
+        return;
+    }
+
+    int choice;
+    do {
+        printf("\n===== 管理员管理 =====\n");
+        printf("当前管理员: %s\n", currentAdmin.userName);
+        printf("当前权限值: %d\n", currentAdmin.permissions);
+        printf("  1. 添加管理员\n");
+        printf("  2. 删除管理员\n");
+        printf("  3. 计费标准管理\n");
+        printf("  0. 返回\n");
+        printf("请选择: ");
+
+        if (scanf("%d", &choice) != 1) {
+            clearInputBuf();
+            choice = -1;
+        } else {
+            clearInputBuf();
+        }
+
+        if (choice == 1) {
+            if ((currentAdmin.permissions & ADMIN_PERM_MANAGE) == 0) {
+                printf("权限不足！\n");
+                continue;
+            }
+
+            Admin newAdmin;
+            memset(&newAdmin, 0, sizeof(newAdmin));
+
+            printf("请输入新管理员账号: ");
+            if (scanf("%18s", newAdmin.userName) != 1) {
+                clearInputBuf();
+                printf("输入无效！\n");
+                continue;
+            }
+            clearInputBuf();
+            if (strlen(newAdmin.userName) == 0) {
+                printf("管理员账号为空！\n");
+                continue;
+            }
+
+            printf("请输入新管理员密码: ");
+            if (scanf("%8s", newAdmin.password) != 1) {
+                clearInputBuf();
+                printf("输入无效！\n");
+                continue;
+            }
+            clearInputBuf();
+            if (strlen(newAdmin.password) == 0) {
+                printf("密码为空！\n");
+                continue;
+            }
+
+            printf("请输入权限值(0~%d): ", ADMIN_PERM_ALL);
+            if (scanf("%d", &newAdmin.permissions) != 1) {
+                clearInputBuf();
+                printf("输入无效！\n");
+                continue;
+            }
+            clearInputBuf();
+            if (newAdmin.permissions < 0 || newAdmin.permissions > ADMIN_PERM_ALL) {
+                printf("权限值无效！\n");
+                continue;
+            }
+
+            int addRet = addAdmin(&newAdmin);
+            if (addRet == 1) {
+                printf("管理员 %s 添加成功！\n", newAdmin.userName);
+            } else if (addRet == -1) {
+                printf("添加失败！管理员账号已存在。\n");
+            } else {
+                printf("添加失败！写入文件时出错。\n");
+            }
+        } else if (choice == 2) {
+            if ((currentAdmin.permissions & ADMIN_PERM_MANAGE) == 0) {
+                printf("权限不足！\n");
+                continue;
+            }
+
+            char deleteName[ADMIN_NAME_LEN];
+            printf("请输入要删除的管理员账号: ");
+            if (scanf("%18s", deleteName) != 1) {
+                clearInputBuf();
+                printf("输入无效！\n");
+                continue;
+            }
+            clearInputBuf();
+            if (strlen(deleteName) == 0) {
+                printf("管理员账号为空！\n");
+                continue;
+            }
+
+            if (strcmp(deleteName, currentAdmin.userName) == 0) {
+                printf("不能删除当前登录的管理员！\n");
+                continue;
+            }
+
+            if (deleteAdmin(deleteName) == 1) {
+                printf("管理员 %s 删除成功！\n", deleteName);
+            } else {
+                printf("删除失败！未找到该管理员账号。\n");
+            }
+        } else if (choice == 3) {
+            if ((currentAdmin.permissions & ADMIN_PERM_MANAGE) == 0) {
+                printf("权限不足！\n");
+                continue;
+            }
+            rateManagementMenu();
+        } else if (choice != 0) {
+            printf("无效的选择！\n");
+        }
     } while (choice != 0);
 }

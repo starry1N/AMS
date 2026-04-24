@@ -73,6 +73,44 @@ int updateRateDelFlag(int rateId, int delFlag)
     return 1;
 }
 
+/* 按 rateId 修改方案名称与费率。成功返回1，未找到返回0 */
+int updateRatePlanFile(int rateId, const char *name, double ratePerHour)
+{
+    FILE *fp = fopen(RATE_FILE, "r");
+    if (fp == NULL) return 0;
+
+    char lines[256][RATE_LINE_LEN];
+    int  total = 0;
+    while (total < 256 && fgets(lines[total], RATE_LINE_LEN, fp) != NULL)
+        total++;
+    fclose(fp);
+
+    int found = 0;
+    for (int i = 0; i < total; i++) {
+        Rate tmp;
+        if (!parseRateLine(lines[i], &tmp)) continue;
+        if (tmp.rateId == rateId) {
+            snprintf(lines[i], RATE_LINE_LEN,
+                     "%d|%s|%.4f|%ld|%d\n",
+                     tmp.rateId,
+                     name,
+                     ratePerHour,
+                     (long)time(NULL),
+                     tmp.delFlag);
+            found = 1;
+            break;
+        }
+    }
+    if (!found) return 0;
+
+    fp = fopen(RATE_FILE, "w");
+    if (fp == NULL) return 0;
+    for (int i = 0; i < total; i++)
+        fputs(lines[i], fp);
+    fclose(fp);
+    return 1;
+}
+
 /* 读取所有有效（delFlag==0）计费方案，返回 malloc 数组，调用方负责 free */
 Rate *readAllRates(int *count)
 {

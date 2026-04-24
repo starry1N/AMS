@@ -30,7 +30,7 @@ int rechargeCard(const char *cardNo, const char *password,
         if (strcmp(card->cardNo, cardNo) == 0
             && strcmp(card->password, password) == 0) {
 
-            if (card->state == CARD_STATE_CANCELLED) { result = -2; break; }
+            if (card->state != CARD_STATE_NORMAL && card->state != CARD_STATE_USING) { result = -2; break; }
 
             card->money += amount;
             updateCard(card);
@@ -112,7 +112,7 @@ int cancelCardService(const char *cardNo, const char *password,
             && strcmp(card->password, password) == 0) {
 
             if (card->state == CARD_STATE_USING)      { result = -2; break; }
-            if (card->state == CARD_STATE_CANCELLED)  { result = -3; break; }
+            if (card->state != CARD_STATE_NORMAL)     { result = -3; break; }
 
             double refund = card->money;
             card->money   = 0.0;

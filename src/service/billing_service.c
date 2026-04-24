@@ -16,10 +16,73 @@
 #include "../../include/billing_service.h"
 
 /* ================================================================
+ *  计费信息链表管理
+ * ================================================================ */
+
+void initBillingList(BillingList *list)
+{
+    list->head  = NULL;
+    list->count = 0;
+}
+
+void freeBillingList(BillingList *list)
+{
+    BillingNode *p = list->head;
+    while (p != NULL) {
+        BillingNode *next = p->next;
+        free(p);
+        p = next;
+    }
+    list->head  = NULL;
+    list->count = 0;
+}
+
+void getBilling(BillingList *list)
+{
+    initBillingList(list);
+
+    int count = 0;
+    Billing *billings = readAllBillings(&count);
+    if (billings == NULL || count == 0) {
+        if (billings != NULL) free(billings);
+        return;
+    }
+
+    BillingNode *tail = NULL;
+    for (int i = 0; i < count; i++) {
+        BillingNode *node = (BillingNode *)malloc(sizeof(BillingNode));
+        if (node == NULL) continue;
+        node->data = billings[i];
+        node->next = NULL;
+
+        if (list->head == NULL) {
+            list->head = node;
+        } else {
+            tail->next = node;
+        }
+        tail = node;
+        list->count++;
+    }
+
+    free(billings);
+}
+
+Billing *queryBilling(BillingList *list, const char *cardNo)
+{
+    BillingNode *p = list->head;
+    while (p != NULL) {
+        if (strcmp(p->data.cardNo, cardNo) == 0)
+            return &p->data;
+        p = p->next;
+    }
+    return NULL;
+}
+
+/* ================================================================
  *  上机
  * ================================================================ */
 int loginCard(const char *cardNo, const char *password,
-              double ratePerHour, Card *outCard)
+              double ratePerHour, LogonInfo *outInfo)
 {
     if (ratePerHour <= 0.0) return -4;  /* 费率必须 > 0 */
 
@@ -54,7 +117,13 @@ int loginCard(const char *cardNo, const char *password,
             billing.delFlag     = NOT_DELETED;
             saveBilling(&billing);
 
-            if (outCard != NULL) *outCard = *card;
+            if (outInfo != NULL) {
+                strncpy(outInfo->cardNo, card->cardNo, sizeof(outInfo->cardNo) - 1);
+                outInfo->cardNo[sizeof(outInfo->cardNo) - 1] = '\0';
+                outInfo->balance = card->money;
+                outInfo->logonTime = card->lastUseTime;
+                outInfo->ratePerHour = ratePerHour;
+            }
             result = 1;
             break;
         }
@@ -68,7 +137,7 @@ int loginCard(const char *cardNo, const char *password,
  *  下机（按当前计费标准计算费用）
  * ================================================================ */
 int logoutCard(const char *cardNo, const char *password,
-               double *cost, time_t *outEndTime)
+               SettleInfo *outInfo)
 {
     CardList list;
     getCard(&list);
@@ -83,11 +152,24 @@ int logoutCard(const char *cardNo, const char *password,
             if (card->state != CARD_STATE_USING) { result = -2; break; }
 
             time_t now   = time(NULL);
+            double initialBalance = card->money;
             double hours = difftime(now, card->lastUseTime) / 3600.0;
             double rate  = card->currentRate;  /* 使用上机时选定的费率 */
             if (rate <= 0.0) rate = DEFAULT_RATE;  /* 兼容旧数据 */
             double fee   = hours * rate;
-            if (fee > card->money) fee = card->money;
+            if (fee > initialBalance) {
+                if (outInfo != NULL) {
+                    strncpy(outInfo->cardNo, card->cardNo, sizeof(outInfo->cardNo) - 1);
+                    outInfo->cardNo[sizeof(outInfo->cardNo) - 1] = '\0';
+                    outInfo->amount = fee;
+                    outInfo->balance = initialBalance;
+                    outInfo->neededRecharge = fee - initialBalance;
+                    outInfo->logonTime = card->lastUseTime;
+                    outInfo->settleTime = now;
+                }
+                result = -3;
+                break;
+            }
 
             card->money      -= fee;
             card->totalMoney += fee;
@@ -106,8 +188,15 @@ int logoutCard(const char *cardNo, const char *password,
             billing.delFlag     = NOT_DELETED;
             updateBillingByCard(&billing);
 
-            if (cost       != NULL) *cost       = fee;
-            if (outEndTime != NULL) *outEndTime = now;
+            if (outInfo != NULL) {
+                strncpy(outInfo->cardNo, card->cardNo, sizeof(outInfo->cardNo) - 1);
+                outInfo->cardNo[sizeof(outInfo->cardNo) - 1] = '\0';
+                outInfo->amount = fee;
+                outInfo->balance = card->money;
+                outInfo->neededRecharge = 0.0;
+                outInfo->logonTime = card->lastUseTime;
+                outInfo->settleTime = now;
+            }
             result = 1;
             break;
         }
@@ -125,6 +214,85 @@ int logoutCard(const char *cardNo, const char *password,
 Billing *queryBillings(int *count)
 {
     return readAllBillings(count);
+}
+
+static int billingRecordInRange(const Billing *billing, time_t startTime, time_t endTime)
+{
+    time_t recordTime = billing->endTime != 0 ? billing->endTime : billing->startTime;
+    return recordTime >= startTime && recordTime <= endTime;
+}
+
+Billing *queryBillingsByCardAndTime(const char *cardNo,
+                                    time_t startTime,
+                                    time_t endTime,
+                                    int *count)
+{
+    *count = 0;
+    int total = 0;
+    Billing *billings = readAllBillings(&total);
+    if (billings == NULL || total == 0) {
+        if (billings != NULL) free(billings);
+        return NULL;
+    }
+
+    Billing *result = (Billing *)malloc(total * sizeof(Billing));
+    if (result == NULL) {
+        free(billings);
+        return NULL;
+    }
+
+    for (int i = 0; i < total; i++) {
+        if (strcmp(billings[i].cardNo, cardNo) == 0
+            && billingRecordInRange(&billings[i], startTime, endTime)) {
+            result[*count] = billings[i];
+            (*count)++;
+        }
+    }
+
+    free(billings);
+    if (*count == 0) {
+        free(result);
+        return NULL;
+    }
+    return result;
+}
+
+double getTotalRevenueByTime(time_t startTime, time_t endTime)
+{
+    int total = 0;
+    Billing *billings = readAllBillings(&total);
+    double revenue = 0.0;
+    for (int i = 0; i < total; i++) {
+        if (billingRecordInRange(&billings[i], startTime, endTime))
+            revenue += billings[i].amount;
+    }
+    if (billings != NULL) free(billings);
+    return revenue;
+}
+
+void getMonthlyRevenue(int year, double monthlyRevenue[12])
+{
+    for (int i = 0; i < 12; i++) monthlyRevenue[i] = 0.0;
+
+    int total = 0;
+    Billing *billings = readAllBillings(&total);
+    if (billings == NULL || total == 0) {
+        if (billings != NULL) free(billings);
+        return;
+    }
+
+    for (int i = 0; i < total; i++) {
+        if (billings[i].endTime == 0) continue;
+        struct tm *tmInfo = localtime(&billings[i].endTime);
+        if (tmInfo == NULL) continue;
+        if (tmInfo->tm_year + 1900 == year) {
+            int month = tmInfo->tm_mon;
+            if (month >= 0 && month < 12)
+                monthlyRevenue[month] += billings[i].amount;
+        }
+    }
+
+    free(billings);
 }
 
 /* 统计总营业额 */

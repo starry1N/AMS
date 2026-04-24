@@ -28,6 +28,12 @@ int deleteRatePlan(int rateId)
     return updateRateDelFlag(rateId, 1);
 }
 
+/* 修改计费方案。成功返回1，未找到返回0 */
+int updateRatePlan(int rateId, const char *name, double ratePerHour)
+{
+    return updateRatePlanFile(rateId, name, ratePerHour);
+}
+
 /* 获取所有有效计费方案，调用方负责 free */
 Rate *getAllRatePlans(int *count)
 {
